@@ -43,10 +43,20 @@ const processActions = async (vm: VM) => {
         vm = await vm.clone(true);
 
         fetchTransactions().catch((e: any) => {
-            if (e.message !== 'Nothing to fetch') {
+            if (e.message === 'Too many simultaneous connections. (Failure)') {
+                // console.log(e.message);
+                // console.error(e);
+                // setTimeout(() => {
+                //     processActions(vm);
+                // }, 20000);
+                process.exit(0);
+                return;
+            } else if (e.message !== 'Nothing to fetch') {
+                console.log(e.message);
                 console.error(e);
+                process.exit(0);
             }
-        });
+        }).then(() => { console.log('SUCC') });
 
         const pendingTxs: any[] = await Mail.findAll({ where: { processed: { [Op.is]: null } }, raw: true });
         pendingTxs.reverse();
@@ -166,7 +176,7 @@ const processActions = async (vm: VM) => {
 
     setTimeout(() => {
         processActions(vm);
-    }, 10000);
+    }, 1000);
 }
 
 (async () => {

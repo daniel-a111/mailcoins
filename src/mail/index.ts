@@ -72,9 +72,9 @@ async function fetchIncome() {
         }
     };
     return new Promise<any[]>(async (acc: Function, rej: Function) => {
+        const imap = new Imap(imapConfig);
         try {
             const incomes: any[] = [];
-            const imap = new Imap(imapConfig);
             const fetcher = new MailFetcher(imap);
             let i = 0;
             imap.once('ready', () => {
@@ -127,6 +127,9 @@ async function fetchIncome() {
                             });
                         } catch (e: any) {
                             // console.error(e);
+                            try {
+                                imap.end();
+                            } catch { }
                             rej(e);
                         }
 
@@ -154,8 +157,15 @@ async function fetchIncome() {
 }
 
 export const fetchTransactions = async () => {
-    const inbox = await fetchIncome();
-    console.log({ inbox });
-    return inbox;
+    try {
+        const inbox = await fetchIncome();
+        console.log({ inbox });
+        return inbox;
+    } catch (e) {
+        if (e.message !== 'Nothing to fetch') {
+            console.log(e.message);
+            process.exit(0);
+        }
+    }
 }
 
