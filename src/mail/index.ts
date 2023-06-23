@@ -35,7 +35,9 @@ class MailFetcher {
             console.log({ message });
 
             // process.exit(0);
-            await Mail.create({ ...message });
+            try {
+                await Mail.create({ ...message });
+            } catch { }
         }
         // process.exit(0);
 
