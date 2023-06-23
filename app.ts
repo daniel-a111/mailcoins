@@ -1,32 +1,24 @@
 import "./env";
 
-import nodemailer from 'nodemailer';
 
 
 
 import { VM, getOrLoad } from "scaas/src/vm/vm";
 
 import "./src/config";
-import { fetchTransactions } from "./src/mail";
 import { Mail, sequelize } from "./src/models";
 
+import { Op } from "sequelize";
 import * as contracts from "./src/contracts";
 import { State } from "./src/contracts/coin";
+import { fetchTransactions } from "./src/mail";
+
+import * as proc from "./src/process";
+
 
 
 
 export const smtpConfig = {
-    // host: process.env.MAILER_IMAP_HOST,
-    // port: parseInt(process.env.MAILER_SMTP_PORT),
-    // user: process.env.MAILER_IMAP_USER,
-    // pass: process.env.MAILER_IMAP_PASS,
-    // auth: {
-    //     user: process.env.MAILER_IMAP_USER,
-    //     pass: process.env.MAILER_IMAP_PASS,
-    // },
-    // secure: true,
-    // tls: true
-
     user: 'coin.in.mail1@gmail.com',
     password: 'taseuhkopyniqxwz',
     pass: 'taseuhkopyniqxwz',
@@ -48,9 +40,39 @@ export const smtpConfig = {
 const processActions = async (vm: VM) => {
 
     try {
-        const txs = await fetchTransactions();
+        vm = await vm.clone(true);
+
+        fetchTransactions().catch((e: any) => {
+            if (e.message !== 'Nothing to fetch') {
+                console.error(e);
+            }
+        });
+
+        const pendingTxs: any[] = await Mail.findAll({ where: { processed: { [Op.is]: null } }, raw: true });
+        pendingTxs.reverse();
+
+        const txs: any[] = [];
+        const overrides: any = {};
+        const txByUser: any = {};
+        for (const tx of pendingTxs) {
+            if (overrides[tx.from]) {
+                overrides[tx.from].push(tx.id);
+                continue;
+            }
+            txs.push(tx);
+            txByUser[tx.from] = tx.id;
+            overrides[tx.from] = [];
+        }
+        txs.reverse();
+
+        for (const from in overrides) {
+            if (overrides[from].length) {
+                await Mail.update({ override: txByUser[from] }, { where: { id: { [Op.in]: overrides[from] } }, transaction: vm.transaction });
+            }
+        }
+
         for (const tx of txs) {
-            const m: any = await Mail.findByPk(tx.messageId);
+            const m: any = await Mail.findByPk(tx.id);
             if (!m || !m.processed) {
                 const { from, to, text, subject } = tx;
                 let fromAcc: any = await vm.getUserByEmail(from, '0000');
@@ -63,252 +85,97 @@ const processActions = async (vm: VM) => {
                 }
                 fromAcc = await vm.getUserByEmail(from, '0000');
                 toAcc = await vm.getUserByEmail(to, '0000');
-                console.log({ fromAcc, toAcc });
-                // process.exit(0);
+
                 let parts = text.split('\n');
                 parts.map((p: any) => p.trim());
 
-                let coin: any = await State.bind(undefined).findOne({ where: { owner: fromAcc.id }, raw: true });
+
                 const ses = await vm.login(from, '123');
-                let transporter = nodemailer.createTransport(smtpConfig);
+                try {
 
-                switch (subject.toLowerCase()) {
-                    case 'deploy':
-                        const name = parts[0];
-                        const symbol = parts[1];
+                    switch (subject.toLowerCase()) {
+                        case 'deploy':
+                            const name = parts[0];
+                            const symbol = parts[1];
+                            await vm.deploy(contracts.coin.deploy, {
+                                name, symbol
+                            }, ses);
+                            break;
 
-                        await vm.deploy(contracts.coin.deploy, {
-                            name, symbol
-                        }, ses);
-
-                        let info = await transporter.sendMail({
-                            sender: `"Office" <coin.in.mail1@gmail.com>`, // sender address
-                            to: from, // list of receivers
-                            subject: "Hello ✔", // Subject line
-                            html: `Coin "${name} with symbol "${symbol}" deployed successfully`,
-                            replyTo: from,
-                            inReplyTo: tx.messageId
-                        });
-
-                        // console.log({ name, symbol });
-                        // process.exit(0);
-                        break;
-                    case 'mint':
-                        {
-                            const symbol = parts[0];
-                            coin = await State.bind(undefined).findOne({ where: { symbol }, raw: true });
-                            // console.log({ coin });
-                            // if (!coin) {
-                            //     throw new Error("Asdfsadf");
-                            // }
-                            // process.exit(0);
-
-                            const amount = parts[1];
-                            await vm.action(coin.contractId, contracts.coin.mint, { addr: toAcc.id, amount: amount }, ses);
-                            await transporter.sendMail({
-                                from: `"Office" <coin.in.mail1@gmail.com>`, // sender address
-                                to, // list of receivers
-                                subject: "Hello ✔", // Subject line
-                                html: `You got minted with coin symbol "${coin.symbol}"<br /><br />` +
-                                    `your current balance is: ${await vm.view(coin.id, contracts.coin.balanceOf, toAcc.id, ses)}`,
-                                replyTo: to,
-                                inReplyTo: tx.messageId
-                            });
-                            await transporter.sendMail({
-                                from: `"Office" <coin.in.mail1@gmail.com>`, // sender address
-                                to: from, // list of receivers
-                                subject: "Hello ✔", // Subject line
-                                html: `You had minted ${to} with coin symbol "${coin.symbol}"<br /><br />` +
-                                    `${to} current balance is: ${await vm.view(coin.id, contracts.coin.balanceOf, toAcc.id, ses)}`,
-                                replyTo: from,
-                                inReplyTo: tx.messageId
-                            });
-                        }
-                        break;
-                    case 'burn':
-                        {
-                            const symbol = parts[0];
-                            coin = await State.bind(undefined).findOne({ where: { symbol }, raw: true });
-                            const amount = parts[1];
-                            await vm.action(coin.contractId, contracts.coin.burn, { addr: toAcc.id, amount: amount }, ses);
-                            await transporter.sendMail({
-                                from: `"Office" <coin.in.mail1@gmail.com>`, // sender address
-                                to, // list of receivers
-                                subject: "Hello ✔", // Subject line
-                                html: `You got burned with coin symbol "${coin.symbol}"<br /><br />` +
-                                    `your current balance is: ${await vm.view(coin.id, contracts.coin.balanceOf, toAcc.id, ses)}`,
-                                replyTo: to,
-                                inReplyTo: tx.messageId
-                            });
-                            await transporter.sendMail({
-                                from: `"Office" <coin.in.mail1@gmail.com>`, // sender address
-                                to: from, // list of receivers
-                                subject: "Hello ✔", // Subject line
-                                html: `You had burned ${to} with coin symbol "${coin.symbol}"<br /><br />` +
-                                    `your current balance is: ${await vm.view(coin.id, contracts.coin.balanceOf, toAcc.id, ses)}`,
-                                replyTo: from,
-                                inReplyTo: tx.messageId
-                            });
-                        }
-                        break;
-                    case 'balanceOf':
-
-                        break;
-                    case 'name':
-                        break;
-                    case 'symbol':
-                        break;
-                    case 'transfer':
-                        {
-                            const symbol = parts[0];
-                            coin = await State.bind(undefined).findOne({ where: { symbol }, raw: true });
-                            const amount = parts[1];
-                            await vm.action(coin.contractId, contracts.coin.transfer, { addr: toAcc.id, amount: amount }, ses);
-
-                            await transporter.sendMail({
-                                from: `"Office" <coin.in.mail1@gmail.com>`, // sender address
-                                to: from, // list of receivers
-                                subject: "Hello ✔", // Subject line
-                                html: `You transferred successfully with coin symbol "${coin.symbol}"<br /><br />` +
-                                    `your current balance is: ${await vm.view(coin.id, contracts.coin.balanceOf, fromAcc.id, ses)}`,
-                                replyTo: from,
-                                inReplyTo: tx.messageId
-                            });
-                            await transporter.sendMail({
-                                from: `"Office" <coin.in.mail1@gmail.com>`, // sender address
-                                to, // list of receivers
-                                subject: "Hello ✔", // Subject line
-                                html: `You have been got transfer from ${to} with coin symbol "${coin.symbol}"<br /><br />` +
-                                    `${to} current balance is: ${await vm.view(coin.id, contracts.coin.balanceOf, toAcc.id, ses)}`,
-                                replyTo: to,
-                                inReplyTo: tx.messageId
-                            });
-                        }
-                        break;
-                    case 'transferFrom':
-                        break;
-                    case 'allowance':
-                        break;
-                    case 'approve':
-                        break;
+                        case 'mint':
+                            {
+                                const symbol = parts[0];
+                                let coin: any = await State.bind(undefined).findByPk(symbol, { raw: true });
+                                coin = await State.bind(undefined).findOne({ where: { symbol }, raw: true });
+                                const amount = parts[1];
+                                await vm.action(coin.contractId, contracts.coin.mint, { addr: toAcc.id, amount: amount }, ses);
+                            }
+                            break;
+                        case 'burn':
+                            {
+                                const symbol = parts[0];
+                                let coin: any = await State.bind(undefined).findByPk(symbol, { raw: true });
+                                coin = await State.bind(undefined).findOne({ where: { symbol }, raw: true });
+                                const amount = parts[1];
+                                await vm.action(coin.contractId, contracts.coin.burn, { addr: toAcc.id, amount: amount }, ses);
+                            }
+                            break;
+                        case 'balance':
+                            {
+                                const symbol = parts[0];
+                                let coin: any = await State.bind(undefined).findByPk(symbol, { raw: true });
+                                coin = await State.bind(undefined).findOne({ where: { symbol }, raw: true });
+                                await vm.action(coin.contractId, contracts.coin.balanceOf, fromAcc.id, ses);
+                            }
+                            break;
+                        case 'name':
+                            break;
+                        case 'symbol':
+                            break;
+                        case 'transfer':
+                            {
+                                const symbol = parts[0];
+                                let coin: any = await State.bind(undefined).findByPk(symbol, { raw: true });
+                                coin = await State.bind(undefined).findOne({ where: { symbol }, raw: true });
+                                const amount = parts[1];
+                                console.log({ symbol });
+                                await vm.action(coin.contractId, contracts.coin.transfer, { addr: toAcc.id, amount: amount }, ses);
+                            }
+                            break;
+                        case 'transferFrom':
+                            break;
+                        case 'allowance':
+                            break;
+                        case 'approve':
+                            break;
+                    }
+                } catch (e) {
+                    console.error(e);
                 }
-                await Mail.create({ id: tx.messageId, processed: true });
+                await Mail.update({ processed: new Date() }, { where: { id: tx.id } });
             }
+
         }
+
+        await vm.endSim(true);
 
     } catch (e: any) {
         console.error(e);
-        process.exit(0);
+        // process.exit(0);
     }
 
     setTimeout(() => {
         processActions(vm);
-    }, 1000);
+    }, 10000);
 }
 
 (async () => {
     let force = false;
     await sequelize.sync({ force });
 
+    proc.feedback.startFeedbackProcess();
+
     const vm: VM = await getOrLoad();
     processActions(vm);
 
 })();
-
-
-// import bodyParser from 'body-parser';
-// import cors from 'cors';
-// import express from 'express';
-// import { getOrLoad, VM } from 'scaas/src/vm/vm';
-// import { logger } from './src/logger';
-// import { sequelize, Settings } from './src/models';
-// import routes from './src/routes';
-// import { initContracts } from './traveltech/contracts';
-
-// const app = express();
-// const port = 3000;
-
-
-// // ws.connection.start();
-
-// app.use(express.json({ limit: '25mb' }));
-// app.use(express.urlencoded({ limit: '25mb' }));
-// app.use(bodyParser.json());
-
-// app.use(cors({
-//     origin: '*', methods: '*'
-// }));
-
-// // app.use(fileUpload({
-// //     createParentPath: true
-// // }));
-// // app.get('/', (req, res) => {
-// //     res.send('Hello World!');
-// // });
-
-// // app.use('/', routes);
-// app.use('/', routes);
-
-// (async () => {
-//     let force = false;
-//     await sequelize.sync({ force });
-//     console.log({ ...sequelize.sequlize })
-//     console.log('!@!!@!@\n\n\n\n\n\n\n\n')
-//     // await Account.destroy({ where: {} });
-//     // const users = await Account.findAll();
-
-//     // await initContracts();
-
-//     logger.info('....');
-
-//     const settings: any = await Settings.bind(undefined).findOne({ raw: true });
-//     if (!settings) {
-//         const vm: VM = await getOrLoad();
-
-//         await vm.genUser({
-//             name: 'Daniel',
-//             email: 'assa.daniel@gmail.com',
-//             pass: '123123123',
-//             userId: '0000'
-//         });
-
-//         await vm.genUser({
-//             name: 'Liad',
-//             email: 'liad.shekel@gmail.com',
-//             pass: '123123123',
-//             userId: '0000'
-//         });
-
-//         // const login = await auth.login("assa.daniel@gmail.com", "123123123");
-//         // const addr = await vm.deploy<any>(
-//         //     contracts.agencies_manager.deploy,
-//         //     {},
-//         //     login
-//         // )
-//         // // await Settings.create({
-//         // //     master: login.uid,
-//         // //     agenciesManager: `${addr.id}`
-//         // // });
-
-//         // await vm.action<any, void>(
-//         //     addr.id.toString(),
-//         //     contracts.agencies_manager.addMember,
-//         //     { email: 'lipnergroup@gmail.com' },
-//         //     login
-//         // )
-//     }
-
-//     if (force) {
-//         // auth.registerAccount({
-//         //   username: 'daniel',
-//         //   email: 'assa.daniel@gmail.com',
-//         //   password: '123123123'
-//         // });
-//     }
-// })();
-
-
-// app.listen(port, () => {
-//     // sequelize.
-//     return console.log(`Express is listening at http://localhost:${port}`);
-// });

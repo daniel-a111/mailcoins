@@ -26,9 +26,8 @@ registerContract(() => {
 });
 
 export const State = sequelize.define('coin', {
-    id: { type: DataTypes.STRING, primaryKey: true },
+    symbol: { type: DataTypes.STRING, primaryKey: true },
     name: DataTypes.STRING,
-    symbol: DataTypes.STRING,
     owner: DataTypes.STRING
 }, {
     indexes: []
@@ -57,7 +56,19 @@ export const Allowance = sequelize.define('allowance', {
 
 export const deploy: ContractDeploy<any, Addr> = async (vm: VM, { name, symbol }: { name: string; symbol: string; }): Promise<Addr> => {
     const id = vm.env().addr.id;
-    await State.bind(vm).create({ id, name, symbol, owner: vm.env().message.sender.id });
+    const owner = vm.env().message.sender.id;
+    if (!symbol) {
+        throw new Error(`coin symbol is missing`);
+    }
+    if (!name) {
+        throw new Error(`coin name is missing`);
+    }
+    const existsCheck: any = !!(await State.bind(undefined).findByPk(symbol));
+    if (existsCheck) {
+        throw new Error(`coin with symbol ${symbol} already exists`);
+    }
+    await State.bind(vm).create({ id, name, symbol, owner });
+    await vm.event('Coin Deployed', { owner, name, symbol });
     return vm.env().addr;
 }
 
@@ -105,6 +116,7 @@ const _mint = async (vm: VM, data: Mint): Promise<any> => {
         await Balance.bind(vm).create({ addr: addr, amount: 0 });
     }
     await Balance.bind(vm).update({ amount: sequelize.sequlize.literal(`amount + ${amount}`) }, { where: { addr } });
+    await vm.event('Mint', { amount, addr });
 }
 
 
@@ -131,10 +143,8 @@ export const balanceOf = async (vm: VM, addr: string): Promise<any> => {
 
 const _balanceOf = async (vm: VM, addr: string): Promise<number> => {
     const balance: any = await Balance.bind(vm).findOne({ where: { addr } });
-    if (!balance) {
-        return 0;
-    }
-    return balance.amount;
+    await vm.event('Balance', { amount: balance?.amount || 0 });
+    return balance?.amount || 0;
 }
 
 export const transfer = async (vm: VM, data: Transfer): Promise<any> => {
@@ -156,6 +166,7 @@ const _transfer = async (vm: VM, from: string, to: string, amount: number): Prom
     }
     await Balance.bind(vm).update({ amount: sequelize.sequlize.literal(`amount + ${amount}`) }, { where: { addr: to } });
     await Balance.bind(vm).update({ amount: sequelize.sequlize.literal(`amount - ${amount}`) }, { where: { addr: from } });
+    await vm.event('Transfer', { from, to, amount });
 }
 
 export const totalSupply = async (vm: VM, addr: string): Promise<any> => {
