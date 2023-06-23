@@ -96,6 +96,13 @@ const proc = async () => {
             case 'mint':
                 subject = 'Mint: re (feedback)'
                 break;
+            case 'transfer':
+                subject = 'Transfer: re (feedback)'
+                break;
+            case 'balanceOf':
+                subject = 'Balance: re (feedback)'
+                break;
+
         }
 
         const transporter = prepareTransporter();
