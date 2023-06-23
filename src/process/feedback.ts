@@ -72,7 +72,7 @@ const proc = async () => {
                             receiverEmail.email = toAcc.email;
                             receiverEmail.exists = true;
                             // receiverEmail.subject = `You had recieve ${coin?.symbol} coin`;
-                            receiverEmail.subject = `Transfer success`;
+                            receiverEmail.subject = `Recieved: ${event?.args?.amount} ${coin?.symbol}.`;
                             receiverEmail.html = `<h1>You had recieve ${coin?.symbol} coin</h1>`;
                             receiverEmail.html += `Congratulations! ${fromAcc.email} have transfered you ${event?.args?.amount} ${coin.symbol} successfully. Your current balance is ${toBal.amount}`;
                         }
